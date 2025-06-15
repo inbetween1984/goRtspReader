@@ -1,0 +1,14 @@
+{
+  "streams": [
+    { "url": "rtsp://localhost:8554/", "outputDir": "stream1_frames" },
+    { "url": "rtsp://localhost:8555/", "outputDir": "stream2_frames" },
+    { "url": "rtsp://localhost:8556/", "outputDir": "stream3_frames" },
+    { "url": "rtsp://localhost:8557/", "outputDir": "stream4_frames" },
+    { "url": "rtsp://localhost:8558/", "outputDir": "stream5_frames" },
+    { "url": "rtsp://localhost:8559/", "outputDir": "stream6_frames" },
+    { "url": "rtsp://localhost:8560/", "outputDir": "stream7_frames" },
+    { "url": "rtsp://localhost:8561/", "outputDir": "stream8_frames" },
+    { "url": "rtsp://localhost:8562/", "outputDir": "stream9_frames" },
+    { "url": "rtsp://localhost:8563/", "outputDir": "stream10_frames" }
+  ]
+}
