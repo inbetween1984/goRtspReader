@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/redis/go-redis/v9"
 	"os"
 	"os/exec"
-	"path/filepath"
+	_ "path/filepath"
 	"sync"
 )
 
@@ -18,27 +22,68 @@ type Config struct {
 	Streams []StreamConfig `json:"streams"`
 }
 
-func saveFrames(rtspURL, outputDir string, wg *sync.WaitGroup) {
+var ctx = context.Background()
+
+func streamFramesToRedis(rtspURL string, channelName string, wg *sync.WaitGroup, rdb *redis.Client) {
 	defer wg.Done()
 
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		fmt.Printf("Ошибка создания директории %s: %v\n", outputDir, err)
+	cmd := exec.Command("ffmpeg", "-i", rtspURL, "-vf", "fps=10", "-f", "image2pipe", "-vcodec", "mjpeg", "-")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Printf("Ошибка stdout ffmpeg (%s): %v\n", channelName, err)
 		return
 	}
 
-	outputPattern := filepath.Join(outputDir, "frame_%04d.jpg")
-	cmd := exec.Command("ffmpeg", "-i", rtspURL, "-vf", "fps=10", outputPattern)
-
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("Ошибка запуска FFmpeg для %s: %v\n", rtspURL, err)
+	if err := cmd.Start(); err != nil {
+		fmt.Printf("Ошибка запуска ffmpeg (%s): %v\n", channelName, err)
 		return
 	}
 
-	fmt.Printf("Кадры успешно сохранены для %s\n", rtspURL)
+	reader := bufio.NewReader(stdout)
+	var buffer bytes.Buffer
+	inFrame := false
+
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			fmt.Printf("Ошибка чтения из stdout (%s): %v\n", channelName, err)
+			break
+		}
+
+		if !inFrame {
+			if b == 0xFF {
+				next, err := reader.Peek(1)
+				if err == nil && next[0] == 0xD8 {
+					buffer.Reset()
+					buffer.WriteByte(b)
+					b2, _ := reader.ReadByte()
+					buffer.WriteByte(b2)
+					inFrame = true
+				}
+			}
+		} else {
+			buffer.WriteByte(b)
+
+			if b == 0xFF {
+				next, err := reader.Peek(1)
+				if err == nil && next[0] == 0xD9 {
+					b2, _ := reader.ReadByte()
+					buffer.WriteByte(b2)
+
+					err := rdb.RPush(ctx, channelName, buffer.Bytes()).Err()
+					if err != nil {
+						fmt.Printf("Ошибка отправки в Redis (%s): %v\n", channelName, err)
+					}
+
+					inFrame = false
+				}
+			}
+		}
+	}
 }
 
 func main() {
-	configFile := "config.json"
+	configFile := os.Getenv("CONFIG_FILE")
 	file, err := os.Open(configFile)
 	if err != nil {
 		fmt.Printf("Ошибка открытия конфигурационного файла: %v\n", err)
@@ -52,12 +97,16 @@ func main() {
 		return
 	}
 
+	rdb := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+	})
+
 	var wg sync.WaitGroup
-	for _, stream := range config.Streams {
+	for i, stream := range config.Streams {
+		channel := fmt.Sprintf("stream%d", i+1)
 		wg.Add(1)
-		go saveFrames(stream.URL, stream.OutputDir, &wg)
+		go streamFramesToRedis(stream.URL, channel, &wg, rdb)
 	}
 
 	wg.Wait()
-	fmt.Println("Все потоки обработаны")
 }
